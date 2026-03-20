@@ -4,6 +4,7 @@ import socket
 import socketserver
 import subprocess
 import sys
+from urllib.parse import urlparse
 from html import escape
 
 PORT = 8001
@@ -11,9 +12,15 @@ PORT = 8001
 UPLOAD_DIR = os.path.join(os.getcwd(), "uploaded")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+
+class ReusableTCPServer(socketserver.TCPServer):
+    # Allow restarting quickly without waiting for OS socket timeout.
+    allow_reuse_address = True
+
 class UploadHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        if self.path == '/upload':
+        request_path = urlparse(self.path).path
+        if request_path in ('/', '/upload', '/upload/'):
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
@@ -234,10 +241,18 @@ def open_upload_dir():
 
 
 handler = UploadHandler
-with socketserver.TCPServer(("", PORT), handler) as httpd:
-    print(f"Serving at http://localhost:{PORT}/upload")
-    internal_ip = get_internal_ip()
-    if internal_ip:
-        print(f"Also reachable at http://{internal_ip}:{PORT}/upload")
-    open_upload_dir()
-    httpd.serve_forever()
+try:
+    with ReusableTCPServer(("", PORT), handler) as httpd:
+        print(f"Serving at http://localhost:{PORT}/upload")
+        internal_ip = get_internal_ip()
+        if internal_ip:
+            print(f"Also reachable at http://{internal_ip}:{PORT}/upload")
+        open_upload_dir()
+        httpd.serve_forever()
+except OSError as exc:
+    if exc.errno == 48:
+        print(f"Port {PORT} is already in use.")
+        print(f"Close the process using port {PORT}, or change PORT in upload_server.py.")
+        print(f"Tip (macOS): lsof -nP -iTCP:{PORT} -sTCP:LISTEN")
+    else:
+        raise
